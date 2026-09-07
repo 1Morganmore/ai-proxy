@@ -65,6 +65,8 @@ REFRESH_TOKEN_URL = f'{BASE_URL}/api/v1/user/token/refresh'
 DEFAULT_ACCESS_TOKEN = str(_setting('FANZHA_ACCESS_TOKEN', 'access_token', ''))
 DEFAULT_REFRESH_TOKEN = str(_setting('FANZHA_REFRESH_TOKEN', 'refresh_token', ''))
 DEFAULT_MODEL = str(_setting('DEFAULT_MODEL', 'default_model', '国家反诈AI'))
+FORWARD_SYSTEM_PROMPT = str(_setting('FORWARD_SYSTEM_PROMPT', 'forward_system_prompt', 'false')).strip().lower() in {'1', 'true', 'yes', 'on'}
+
 
 app = FastAPI(title='国家反诈AI - OpenAI兼容反向代理服务', version='1.1.0')
 
@@ -136,59 +138,102 @@ ROLE_LABELS = {
 MAX_PROMPT_CHARS = 4000
 
 
-def flatten_messages(messages: List[Any], max_chars: int = MAX_PROMPT_CHARS) -> str:
+def flatten_messages(messages: List[Any], max_chars: int = MAX_PROMPT_CHARS, forward_system: bool = FORWARD_SYSTEM_PROMPT) -> str:
     turns: List[tuple[str, str]] = []
     for msg in messages:
         if not isinstance(msg, dict):
             continue
+        role = msg.get('role') or 'user'
+        if role == 'system' and not forward_system:
+            continue
         text = extract_text_content(msg.get('content')).strip()
         if not text:
             continue
-        turns.append((msg.get('role') or 'user', text))
+        turns.append((role, text))
     if not turns:
         return ''
 
-    def format_turn(role: str, text: str) -> str:
-        if len(turns) == 1 and role == 'user':
+    last_user_idx = next((i for i in range(len(turns) - 1, -1, -1) if turns[i][0] == 'user'), None)
+    if last_user_idx is None:
+        return ''
+    turns = turns[: last_user_idx + 1]
+
+    single_user = len(turns) == 1 and turns[0][0] == 'user'
+
+    def overhead(role: str) -> int:
+        if single_user and role == 'user':
+            return 0
+        return len(ROLE_LABELS.get(role, role)) + 2
+
+    def render(role: str, text: str) -> str:
+        if single_user and role == 'user':
             return text
         return f'{ROLE_LABELS.get(role, role)}: {text}'
 
-    def clip(text: str, limit: int) -> str:
-        if limit <= 0:
+    def fit(role: str, text: str, budget: int, keep: str) -> str:
+        if budget <= 0:
             return ''
-        return text if len(text) <= limit else text[-limit:]
+        prefix = overhead(role)
+        if budget <= prefix:
+            return ''
+        content_budget = min(len(text), budget - prefix)
+        if content_budget <= 0:
+            return ''
+        content = text[:content_budget] if keep == 'head' else text[-content_budget:]
+        return render(role, content)
 
-    formatted = [format_turn(role, text) for role, text in turns]
+    formatted = [render(role, text) for role, text in turns]
     joined = '\n'.join(formatted)
     if len(joined) <= max_chars:
         return joined
 
-    last_idx = len(turns) - 1
-    system_idx = next((i for i, (role, _) in enumerate(turns) if role == 'system'), None)
-    keep_idx = []
+    last_idx = last_user_idx
+    reserved: List[tuple[int, str]] = []
+    system_idx = next((i for i, (role, _) in enumerate(turns) if role == 'system'), None) if forward_system else None
     if system_idx is not None:
-        keep_idx.append(system_idx)
-    if last_idx not in keep_idx:
-        keep_idx.append(last_idx)
+        reserved.append((system_idx, 'head'))
+    if last_idx not in {idx for idx, _ in reserved}:
+        reserved.append((last_idx, 'tail'))
 
-    remaining = max_chars
+    n_reserved = len(reserved)
+    seps = max(n_reserved - 1, 0)
+    usable = max(max_chars - seps, 0)
+    budgets = [usable // n_reserved] * n_reserved if n_reserved else []
+    if budgets:
+        budgets[-1] += usable - sum(budgets)
+
     selected: dict[int, str] = {}
-    for idx in keep_idx:
-        if remaining <= 0:
-            break
-        selected[idx] = clip(formatted[idx], remaining)
-        remaining -= len(selected[idx]) + (1 if selected else 0)
+    leftover = 0
+    for (idx, keep), budget in zip(reserved, budgets):
+        role, text = turns[idx]
+        piece = fit(role, text, budget, keep)
+        selected[idx] = piece
+        leftover += budget - len(piece)
 
+    for idx, keep in reversed(reserved):
+        if leftover <= 0:
+            break
+        role, text = turns[idx]
+        piece = fit(role, text, len(selected[idx]) + leftover, keep)
+        leftover -= len(piece) - len(selected[idx])
+        selected[idx] = piece
+
+    used = sum(len(piece) for piece in selected.values() if piece) + max(len([p for p in selected.values() if p]) - 1, 0)
+    remaining = max_chars - used
     for idx in range(last_idx - 1, -1, -1):
         if idx in selected or remaining <= 1:
             continue
-        piece = clip(formatted[idx], remaining - 1)
+        role, text = turns[idx]
+        piece = fit(role, text, remaining - 1, 'tail')
         if not piece:
             continue
         selected[idx] = piece
         remaining -= len(piece) + 1
 
-    return '\n'.join(selected[i] for i in sorted(selected))
+    return '\n'.join(selected[i] for i in sorted(selected) if selected[i])
+
+
+
 
 
 
