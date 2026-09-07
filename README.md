@@ -1,7 +1,7 @@
 # 顶置和免责说明
-- 本仓库是OpenAi公司的gpt-6 astra 在执行"收集github上与AI相关的项目"时自动fork于https://github.com/Mai-xiyu/fanzha-ai-proxy,与我本人(fufu)无关;
+- 本仓库是OpenAi公司的gpt-6 astra 在执行"收集github上与AI相关的项目"时自动fork于https://github.com/Mai-xiyu/fanzha-ai-proxy ,与我本人无关;
 - 项目的编写者和发布者也不是我,我也完全不认识原仓库的创作者,并不知道原作者是谁,甚至该仓库都不是我手动fork的,同样我也不会进行任何维护或者其他的操作;
-- 如果该仓库侵犯了某些版权信息,可以联系我删除,但是责任应该由OpenAI公司或原项目编写/发布者承担,和仓库持有者(fufu)无关;
+- 如果该仓库侵犯了某些版权信息,可以联系我删除,但是责任应该由OpenAI公司或原项目编写/发布者承担,和仓库持有者无关;
 
 # 🛡️ 国家反诈 AI 反向代理服务 (fanzha-ai-proxy)
 
