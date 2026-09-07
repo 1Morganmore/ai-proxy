@@ -1,0 +1,7 @@
+{
+  "access_token": "YOUR_ACCESS_TOKEN_HERE",
+  "refresh_token": "YOUR_REFRESH_TOKEN_HERE",
+  "host": "127.0.0.1",
+  "port": 8088,
+  "default_model": "国家反诈AI"
+}
