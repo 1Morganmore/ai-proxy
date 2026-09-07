@@ -2,20 +2,69 @@ import os
 import time
 import json
 import uuid
-import httpx
+from pathlib import Path
 from typing import Any, List, Union
+
+import httpx
+from dotenv import dotenv_values, load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 import uvicorn
 
-BASE_URL = os.getenv('FANZHA_BASE_URL', 'https://xzfzznt.gaj.sh.gov.cn')
+
+CONFIG_DIR = Path(__file__).resolve().parent
+load_dotenv(CONFIG_DIR / '.env', override=False)
+
+
+def _read_json_config() -> dict[str, Any]:
+    config_path = CONFIG_DIR / 'config.json'
+    if not config_path.exists():
+        return {}
+    try:
+        with config_path.open(encoding='utf-8') as config_file:
+            config = json.load(config_file)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f'config.json 格式错误: {exc}') from exc
+    if not isinstance(config, dict):
+        raise RuntimeError('config.json 必须是 JSON 对象')
+    return config
+
+
+_DOTENV_CONFIG = {
+    key: value for key, value in dotenv_values(CONFIG_DIR / '.env').items()
+    if value is not None and value.strip()
+}
+_FILE_CONFIG = _read_json_config()
+
+
+def _setting(env_key: str, config_key: str, default: Any = None) -> Any:
+    """Resolve settings as process env > .env > config.json > default."""
+    for source in (os.environ, _DOTENV_CONFIG, _FILE_CONFIG):
+        value = source.get(env_key if source is not _FILE_CONFIG else config_key)
+        if value is not None and str(value).strip():
+            return value
+    return default
+
+
+def _port_setting() -> int:
+    raw_port = _setting('PORT', 'port', 8088)
+    try:
+        port = int(str(raw_port).strip())
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f'PORT 必须是 1-65535 的整数，当前值: {raw_port!r}') from exc
+    if not 1 <= port <= 65535:
+        raise RuntimeError(f'PORT 必须是 1-65535 的整数，当前值: {port}')
+    return port
+
+
+BASE_URL = str(_setting('FANZHA_BASE_URL', 'base_url', 'https://xzfzznt.gaj.sh.gov.cn')).rstrip('/')
 CREATE_SESSION_URL = f'{BASE_URL}/api/ai/create_session'
 CHAT_STREAM_URL = f'{BASE_URL}/api/ai/chat?type=0'
 REFRESH_TOKEN_URL = f'{BASE_URL}/api/v1/user/token/refresh'
 
-DEFAULT_ACCESS_TOKEN = os.getenv('FANZHA_ACCESS_TOKEN', '')
-DEFAULT_REFRESH_TOKEN = os.getenv('FANZHA_REFRESH_TOKEN', '')
-DEFAULT_MODEL = os.getenv('DEFAULT_MODEL', '国家反诈AI')
+DEFAULT_ACCESS_TOKEN = str(_setting('FANZHA_ACCESS_TOKEN', 'access_token', ''))
+DEFAULT_REFRESH_TOKEN = str(_setting('FANZHA_REFRESH_TOKEN', 'refresh_token', ''))
+DEFAULT_MODEL = str(_setting('DEFAULT_MODEL', 'default_model', '国家反诈AI'))
 
 app = FastAPI(title='国家反诈AI - OpenAI兼容反向代理服务', version='1.1.0')
 
@@ -258,6 +307,6 @@ async def chat_completions(request: Request):
         raise HTTPException(status_code=500, detail=str(exc))
 
 if __name__ == '__main__':
-    host = os.getenv('HOST', '127.0.0.1')
-    port = int(os.getenv('PORT', 8088))
+    host = str(_setting('HOST', 'host', '127.0.0.1'))
+    port = _port_setting()
     uvicorn.run(app, host=host, port=port)
