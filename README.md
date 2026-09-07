@@ -1,135 +1,129 @@
-# 顶置和免责说明
-- 本仓库是OpenAi公司的gpt-6 astra 在执行"收集github上与AI相关的项目"时自动fork于https://github.com/Mai-xiyu/fanzha-ai-proxy ,与我本人无关;
-- 项目的编写者和发布者也不是我,我也完全不认识原仓库的创作者,并不知道原作者是谁,甚至该仓库都不是我手动fork的,同样我也不会进行任何维护或者其他的操作;
-- 如果该仓库侵犯了某些版权信息,可以联系我删除,但是责任应该由OpenAI公司或原项目编写/发布者承担,和仓库持有者无关;
+# 🛡️ 국가 반사기(보이스피싱 예방) AI 리버스 프록시 서비스 (fanzha-ai-proxy)
 
-# 🛡️ 国家反诈 AI 反向代理服务 (fanzha-ai-proxy)
+"국가 반사기 AI(国家反诈AI)" 지능형 어시스턴트를 표준 **OpenAI 호환 API 인터페이스**(`/v1/chat/completions`)로 변환해 주는 고성능 리버스 프록시 서비스입니다.
 
-将“国家反诈AI”智能助手转换为标准 **OpenAI 兼容 API 接口** (`/v1/chat/completions`) 的高性能反向代理服务。
-
-完美支持流式 (SSE) 输出与非流式响应，可直接无缝接入 **NextChat**、**OneAPI / New API**、**LobeChat**、**Codex CLI** 等主流 AI 客户端及开发框架。
+스트리밍(SSE) 출력과 비스트리밍 응답을 완벽히 지원하며, **NextChat**, **OneAPI / New API**, **LobeChat**, **Codex CLI** 등 주요 AI 클라이언트 및 개발 프레임워크에 매끄럽게 바로 연동할 수 있습니다.
 
 ---
 
-## 🌟 项目特性
+## 🌟 프로젝트 특징
 
-- ⚡ **标准 OpenAI API**：完全兼容 `/v1/chat/completions` 与 `/v1/models` 规范。
-- 🌊 **流式 SSE 响应**：修复并完整支持首包 `role` 下发、增量 delta 传输及 `finish_reason: stop` 结束标识。
-- 🗝️ **灵活鉴权管理**：支持从请求头 `Authorization: Bearer <token>` 动态传参，也支持通过环境变量全局配置。
-- 🔄 **自动续期支持**：内置 Access Token + Refresh Token 刷新机制，长效维持会话状态（最长约 90 天免重新登录）。
-- 🧩 **多模态与 Prompt 兼容**：自动解析处理复杂的 `messages` 结构及多层数组类型 content。
+- ⚡ **표준 OpenAI API**: `/v1/chat/completions` 및 `/v1/models` 규격을 완벽 지원합니다.
+- 🌊 **스트리밍 SSE 응답**: 첫 패킷의 `role` 전달, 증분 delta 전송, `finish_reason: stop` 종료 플래그를 정상 지원하도록 수정 및 구현했습니다.
+- 🗝️ **유연한 인증 관리**: 요청 헤더의 `Authorization: Bearer <token>`을 통한 동적 전달은 물론, 환경 변수를 통한 전역 설정도 지원합니다.
+- 🔄 **자동 갱신 지원**: Access Token + Refresh Token 갱신 메커니즘이 내장되어 있어 세션 상태를 오랫동안 유지할 수 있습니다(최장 약 90일간 재로그인 불필요).
+- 🧩 **멀티모달 및 프롬프트 호환**: 복잡한 `messages` 구조 및 다중 레이어 배열 형태의 content를 자동으로 파싱하고 처리합니다.
 
 ---
 
-## 🔑 令牌 (Token) 获取教程
+## 🔑 토큰(Token) 추출 가이드
 
-> 提示：“国家反诈AI”后端基于 JWT 进行身份验证。代理服务需要 Access Token 访问接口，配置 Refresh Token 可支持自动长效续期。
+> 팁: "국가 반사기 AI" 백엔드는 JWT 기반으로 신원을 인증합니다. 프록시 서비스가 인터페이스에 접근하려면 Access Token이 필요하며, Refresh Token을 설정하면 장기간 자동 갱신을 지원할 수 있습니다.
 
-### 方法一：通过 ADB 提取本地数据库 (推荐 / 最稳定)
+### 방법 1: ADB를 통한 로컬 데이터베이스 추출 (권장 / 가장 안정적)
 
-应用采用 Uni-App 静态打包架构，登录状态持久化保存在手机应用私有 SQLite 数据库中。
+해당 앱은 Uni-App 정적 패키징 아키텍처를 채택하고 있어, 로그인 상태가 모바일 앱의 비공개 SQLite 데이터베이스에 영구 저장됩니다.
 
-1. **开启调试**：手机开启开发者选项并启用 USB 调试，通过数据线连接电脑（终端运行 `adb devices` 确认设备已连接）。
-2. **定位数据库路径**：应用本地 SQLite 数据库位于 `/data/data/uni.app.UNIAD10B08/databases/DCStorage`。
-3. **提取数据库文件并查询**：
+1. **디버깅 활성화**: 스마트폰에서 개발자 옵션을 켜고 USB 디버깅을 활성화한 후, 데이터 케이블로 컴퓨터와 연결합니다(터미널에서 `adb devices`를 실행하여 기기 연결 확인).
+2. **데이터베이스 경로 찾기**: 앱의 로컬 SQLite 데이터베이스 경로는 `/data/data/uni.app.UNIAD10B08/databases/DCStorage`입니다.
+3. **데이터베이스 파일 추출 및 쿼리**:
    ```bash
-   # 导出数据库文件到 SD 卡并 pull 到电脑
+   # 데이터베이스 파일을 SD 카드로 복사 후 컴퓨터로 가져오기
    adb shell "su -c 'cp /data/data/uni.app.UNIAD10B08/databases/DCStorage /sdcard/DCStorage'"
    adb pull /sdcard/DCStorage ./DCStorage
 
-   # 使用 sqlite3 查询 user 记录
+   # sqlite3를 사용하여 user 레코드 쿼리
    sqlite3 ./DCStorage "SELECT value FROM DC_AD10B08_storage WHERE key='user';"
    ```
-4. **提取字段**：解密/解析返回的 JSON 内容，查找 `accessToken`（Access Token）与 `refreshToken`（Refresh Token）。
+4. **필드 추출**: 반환된 JSON 내용을 복호화/파싱하여 `accessToken`(Access Token)과 `refreshToken`(Refresh Token)을 찾습니다.
 
 ---
 
-### 方法二：通过 Chrome Webview 调试 (免 Root)
+### 방법 2: Chrome Webview 디버깅 활용 (루팅 불필요)
 
-1. 手机连电脑并开启 USB 调试。
-2. 手机打开“国家反诈AI”App 并进入 AI 对话界面。
-3. 电脑端打开 Chrome 浏览器，访问地址：
+1. 스마트폰을 컴퓨터에 연결하고 USB 디버깅을 활성화합니다.
+2. 스마트폰에서 "국가 반사기 AI" 앱을 열고 AI 대화 화면으로 들어갑니다.
+3. 컴퓨터에서 Chrome 브라우저를 열고 다음 주소로 접속합니다:
    ```text
    chrome://inspect/#devices
    ```
-4. 在页面列表中找到 `uni.app.UNIAD10B08` 对应的 Webview 目标，点击 **inspect**。
-5. 在弹出的开发者工具中切换到 **Network (网络)** 标签页。
-6. 在 App 中发送任意一条消息，观察抓到的网络请求。
-7. 点击请求路径形如 `/api/ai/create_session` 或 `/api/ai/chat` 的接口，在 **Request Headers** 中找到：
+4. 페이지 목록에서 `uni.app.UNIAD10B08`에 해당하는 Webview 대상을 찾아 **inspect**를 클릭합니다.
+5. 팝업으로 나타난 개발자 도구에서 **Network(네트워크)** 탭으로 전환합니다.
+6. 앱에서 아무 메시지나 전송하고 캡처되는 네트워크 요청을 확인합니다.
+7. 경로가 `/api/ai/create_session` 또는 `/api/ai/chat` 형태인 요청을 클릭한 후, **Request Headers**에서 다음을 찾습니다:
    ```text
    Authorization: Bearer eyJhbGciOiJIUzI1...
    ```
-8. 复制 `Bearer ` 后面的字符串，即为 Access Token。
+8. `Bearer ` 뒤의 문자열을 복사합니다. 이것이 바로 Access Token입니다.
 
 ---
 
-### 方法三：使用抓包工具 (Fiddler / Charles / Reqable / HTTPCanary)
+### 방법 3: 패킷 캡처 툴 사용 (Fiddler / Charles / Reqable / HTTPCanary)
 
-1. 开启抓包工具并配置目标域名过滤：`xzfzznt.gaj.sh.gov.cn`。
-2. 触发 AI 对话，截获 HTTP POST 请求。
-3. 复制 Header 中的 `Authorization` 字段。
+1. 패킷 캡처 도구를 실행하고 대상 도메인 필터를 설정합니다: `xzfzznt.gaj.sh.gov.cn`
+2. AI 대화를 트리거하여 HTTP POST 요청을 가로챕니다.
+3. Header의 `Authorization` 필드 값을 복사합니다.
 
 ---
 
-## 🚀 快速启动
+## 🚀 빠른 시작
 
-### 1. 安装依赖
+### 1. 의존성 설치
 
-环境要求：Python 3.9+
+환경 요구 사항: Python 3.9 이상
 
 ```bash
-git clone https://github.com/kltyton/fanzha-ai-proxy.git
+git clone https://github.com/octobersama/fanzha-ai-proxy.git
 cd fanzha-ai-proxy
 pip install -r requirements.txt
 ```
 
-### 2. 配置环境变量
+### 2. 환경 변수 설정
 
-复制环境变量模板：
+환경 변수 템플릿 복사:
 
 ```bash
 cp .env.example .env
 ```
 
-编辑 `.env` 文件或直接在终端导出环境变量：
+`.env` 파일을 편집하거나 터미널에서 환경 변수를 직접 내보냅니다(export):
 
 **PowerShell (Windows)**:
 ```powershell
-$env:FANZHA_ACCESS_TOKEN="你的Access_Token"
-$env:FANZHA_REFRESH_TOKEN="你的Refresh_Token" # 可选
+$env:FANZHA_ACCESS_TOKEN="당신의_Access_Token"
+$env:FANZHA_REFRESH_TOKEN="당신의_Refresh_Token" # 선택 사항
 ```
 
 **Bash / Zsh (Linux / macOS)**:
 ```bash
-export FANZHA_ACCESS_TOKEN="你的Access_Token"
-export FANZHA_REFRESH_TOKEN="你的Refresh_Token" # 可选
+export FANZHA_ACCESS_TOKEN="당신의_Access_Token"
+export FANZHA_REFRESH_TOKEN="당신의_Refresh_Token" # 선택 사항
 ```
 
-### 3. 运行服务
+### 3. 서비스 실행
 
 ```bash
 python main.py
 ```
 
-服务默认运行在 `http://127.0.0.1:8088`。
+서비스는 기본적으로 `http://127.0.0.1:8088`에서 실행됩니다.
 
-默认**不会**把客户端 `role: system` 转发给上游。国家反诈模型会把常见 Chat 面板注入的 `You are a helpful assistant.` 当成越狱，回复“超出回答范畴”。如需转发，设置 `FORWARD_SYSTEM_PROMPT=true` 后重启服务。
-
+기본적으로 클라이언트의 `role: system` 프롬프트는 업스트림으로 **전달되지 않습니다**. 일반적인 챗 인터페이스에서 주입되는 `You are a helpful assistant.`와 같은 문구를 국가 반사기 모델이 탈옥 시도로 인식하여 "답변 범위를 벗어났습니다"라는 응답을 내놓기 때문입니다. 만약 전달이 필요한 경우, `FORWARD_SYSTEM_PROMPT=true`로 설정한 후 서비스를 재시작하십시오.
 
 ---
 
-## 💻 客户端调用示例
+## 💻 클라이언트 호출 예시
 
 ### cURL
 
 ```bash
 curl http://127.0.0.1:8088/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer 你的Access_Token" \
+  -H "Authorization: Bearer 당신의_Access_Token" \
   -d '{
     "model": "国家反诈AI",
     "messages": [
-      {"role": "user", "content": "收到自称公检法的电话要求转账，应该怎么做？"}
+      {"role": "user", "content": "검경 등 사법기관을 사칭해 송금을 요구하는 전화를 받았을 때 어떻게 대처해야 하나요?"}
     ],
     "stream": true
   }'
@@ -142,12 +136,12 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8088/v1",
-    api_key="你的Access_Token"  # 若已在服务端配置环境变量，此处可填任意非空字符串
+    api_key="당신의_Access_Token"  # 서버 측 환경 변수에 이미 설정되어 있다면 아무 문자열이나 입력해도 됩니다.
 )
 
 response = client.chat.completions.create(
     model="国家反诈AI",
-    messages=[{"role": "user", "content": "请简要说明常见的电信网络诈骗手段有哪些？"}],
+    messages=[{"role": "user", "content": "흔히 발생하는 전기통신금융사기(보이스피싱) 수법에 대해 간단히 설명해 주세요."}],
     stream=True
 )
 
@@ -158,7 +152,7 @@ for chunk in response:
 
 ---
 
-## 📄 开源协议与声明
+## 📄 오픈소스 라이선스 및 안내
 
-- 本项目仅用于技术交流、学术研究与个人学习验证，请勿用于非法用途。
-- 本项目与官方应用无任何附属关系。
+- 본 프로젝트는 순수 기술 교류, 학술 연구 및 개인 학습 검증용으로만 사용되며, 불법적인 용도로 사용해서는 안 됩니다.
+- 본 프로젝트는 공식 앱과 어떠한 제휴나 소속 관계도 없습니다.
