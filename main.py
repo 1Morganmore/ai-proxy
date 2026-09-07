@@ -24,9 +24,9 @@ def _read_json_config() -> dict[str, Any]:
         with config_path.open(encoding='utf-8') as config_file:
             config = json.load(config_file)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f'config.json 格式错误: {exc}') from exc
+        raise RuntimeError(f'Invalid format in config.json: {exc}') from exc
     if not isinstance(config, dict):
-        raise RuntimeError('config.json 必须是 JSON 对象')
+        raise RuntimeError('config.json must be a JSON object')
     return config
 
 
@@ -51,9 +51,9 @@ def _port_setting() -> int:
     try:
         port = int(str(raw_port).strip())
     except (TypeError, ValueError) as exc:
-        raise RuntimeError(f'PORT 必须是 1-65535 的整数，当前值: {raw_port!r}') from exc
+        raise RuntimeError(f'PORT must be an integer between 1 and 65535, got: {raw_port!r}') from exc
     if not 1 <= port <= 65535:
-        raise RuntimeError(f'PORT 必须是 1-65535 的整数，当前值: {port}')
+        raise RuntimeError(f'PORT must be an integer between 1 and 65535, got: {port}')
     return port
 
 
@@ -68,7 +68,7 @@ DEFAULT_MODEL = str(_setting('DEFAULT_MODEL', 'default_model', '国家反诈AI')
 FORWARD_SYSTEM_PROMPT = str(_setting('FORWARD_SYSTEM_PROMPT', 'forward_system_prompt', 'false')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
-app = FastAPI(title='国家反诈AI - OpenAI兼容反向代理服务', version='1.1.0')
+app = FastAPI(title='National Anti-Fraud AI - OpenAI API Compatible Reverse Proxy', version='1.1.0')
 
 class TokenManager:
     def __init__(self, access_token: str, refresh_token: str):
@@ -98,7 +98,7 @@ class TokenManager:
                     self.refresh_token = new_rt
                 return True
         except Exception as e:
-            print(f'[TokenManager] 令牌刷新异常: {e}')
+            print(f'[TokenManager] Token refresh error: {e}')
         return False
 
 
@@ -113,7 +113,7 @@ def extract_token_from_header(auth_header: str) -> str:
 
 
 def extract_text_content(content: Any) -> str:
-    """提取各种复杂 OpenAI message content（字符串、列表、包含多模态字典等）"""
+    """Extract text from complex OpenAI message content (str, list, multimodal dicts, etc.)"""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -298,7 +298,7 @@ async def iter_upstream_answers(client: httpx.AsyncClient, headers: dict[str, st
     async with client.stream('POST', CHAT_STREAM_URL, headers=headers, json=payload) as response:
         if response.status_code >= 400:
             error_body = (await response.aread()).decode('utf-8', errors='replace')
-            raise HTTPException(status_code=502, detail=f'上游聊天接口失败 ({response.status_code}): {error_body[:500]}')
+            raise HTTPException(status_code=502, detail=f'Upstream chat request failed ({response.status_code}): {error_body[:500]}')
         async for line in response.aiter_lines():
             event = parse_sse_line(line)
             if event is None:
@@ -356,7 +356,7 @@ async def create_upstream_session(client: httpx.AsyncClient, current_access_toke
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f'创建上游会话失败: {exc}') from exc
+        raise HTTPException(status_code=502, detail=f'Failed to create upstream session: {exc}') from exc
 
 
 
@@ -450,7 +450,7 @@ async def chat_completions(request: Request):
                             error_chunk = {
                                 'id': chat_id,
                                 'object': 'error',
-                                'error': {'message': '上游未返回增量回答', 'type': 'upstream_error', 'code': 502},
+                                'error': {'message': 'Upstream returned no incremental answer', 'type': 'upstream_error', 'code': 502},
                             }
                             yield f'data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n'
                             yield 'data: [DONE]\n\n'
@@ -495,7 +495,7 @@ async def chat_completions(request: Request):
             full_answer.append(chunk_text)
         content = ''.join(full_answer)
         if not content:
-            raise HTTPException(status_code=502, detail='上游未返回增量回答')
+            raise HTTPException(status_code=502, detail='Upstream returned no incremental answer')
         return JSONResponse({
             'id': chat_id,
             'object': 'chat.completion',
