@@ -1,8 +1,8 @@
 # 🛡️ 국가 반사기(보이스피싱 예방) AI 리버스 프록시 서비스 (fanzha-ai-proxy)
 
-"국가 반사기 AI(国家反诈AI)" 지능형 어시스턴트를 표준 **OpenAI 호환 API 인터페이스**(`/v1/chat/completions`)로 변환해 주는 고성능 리버스 프록시 서비스입니다.
+상하이시 공안국이 개발한 "국가 반사기 AI(国家反诈AI)" 지능형 어시스턴트를 표준 **OpenAI 호환 API 인터페이스**(`/v1/chat/completions`)로 변환해 주는 고성능 리버스 프록시 서비스입니다.
 
-스트리밍(SSE) 출력과 비스트리밍 응답을 완벽히 지원하며, **NextChat**, **OneAPI / New API**, **LobeChat**, **Codex CLI** 등 주요 AI 클라이언트 및 개발 프레임워크에 매끄럽게 바로 연동할 수 있습니다.
+스트리밍(SSE) 출력과 비스트리밍 응답을 완벽히 지원하며, **NextChat**, **OneAPI / New API**, **LobeChat**, **Codex CLI**, **Hermes** 등 주요 AI 클라이언트 및 개발 프레임워크에 매끄럽게 바로 연동할 수 있습니다.
 
 ---
 
@@ -20,7 +20,18 @@
 
 > 팁: "국가 반사기 AI" 백엔드는 JWT 기반으로 신원을 인증합니다. 프록시 서비스가 인터페이스에 접근하려면 Access Token이 필요하며, Refresh Token을 설정하면 장기간 자동 갱신을 지원할 수 있습니다.
 
-### 방법 1: ADB를 통한 로컬 데이터베이스 추출 (권장 / 가장 안정적)
+### 💡 웹 사이트를 통해 토큰을 추출하는 법
+가장 간단한 방법 (PC 웹 브라우저 이용 - 앱 설치 불필요)
+1. 브라우저로 [웹사이트](https://xzfzznt.gaj.sh.gov.cn/) 접속 및 로그인
+2. `F12` 개발자 도구 -> `Application` 탭 -> `Local storage` 클릭
+3. `user` 키값 안의 `accessToken`과 `refreshToken` 복사
+
+<details>
+<summary><b>(접기/펼치기) 📦 기존 토큰 추출 가이드 (스마트폰 앱 기반 방식)</b></summary>
+
+> 다음은 원본이 안내했던 방식입니다. 본질적으로 앱을 스마트폰에 설치하도록 안내하고 있으나, IMEI등의 개인정보를 공유하게 되는 앱을 설치 하는 것 자체가 불필요하다고 판단하여 기본적으로 보여지지 않게 하였습니다. 
+
+### 방법 1: ADB를 통한 로컬 데이터베이스 추출
 
 해당 앱은 Uni-App 정적 패키징 아키텍처를 채택하고 있어, 로그인 상태가 모바일 앱의 비공개 SQLite 데이터베이스에 영구 저장됩니다.
 
@@ -64,7 +75,7 @@
 2. AI 대화를 트리거하여 HTTP POST 요청을 가로챕니다.
 3. Header의 `Authorization` 필드 값을 복사합니다.
 
----
+</details>
 
 ## 🚀 빠른 시작
 
@@ -73,7 +84,7 @@
 환경 요구 사항: Python 3.9 이상
 
 ```bash
-git clone https://github.com/octobersama/fanzha-ai-proxy.git
+git clone https://github.com/maakdan/fanzha-ai-proxy1.git
 cd fanzha-ai-proxy
 pip install -r requirements.txt
 ```
@@ -152,7 +163,9 @@ for chunk in response:
 
 ---
 
-## 📄 오픈소스 라이선스 및 안내
+## 📄 면책 조항
 
 - 본 프로젝트는 순수 기술 교류, 학술 연구 및 개인 학습 검증용으로만 사용되며, 불법적인 용도로 사용해서는 안 됩니다.
 - 본 프로젝트는 공식 앱과 어떠한 제휴나 소속 관계도 없습니다.
+- 본 포크는 특정 상용/공공 시스템의 상업적 이용 및 서비스 약관 위반 행위를 지지하지 않습니다.
+- 본 포크는 https://github.com/lfzk550/fanzha-ai-proxy 를 원류로 하며, [lfzk550(Louis)](https://github.com/lfzk550) 에게 2차 저작물을 제외한 모든 저작권이 있습니다. (All Rights Reserved)
