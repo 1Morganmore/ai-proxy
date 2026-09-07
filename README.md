@@ -113,6 +113,9 @@ python main.py
 
 服务默认运行在 `http://127.0.0.1:8088`。
 
+默认**不会**把客户端 `role: system` 转发给上游。国家反诈模型会把常见 Chat 面板注入的 `You are a helpful assistant.` 当成越狱，回复“超出回答范畴”。如需转发，设置 `FORWARD_SYSTEM_PROMPT=true` 后重启服务。
+
+
 ---
 
 ## 💻 客户端调用示例

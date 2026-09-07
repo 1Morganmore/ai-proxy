@@ -404,7 +404,7 @@ async def chat_completions(request: Request):
     if not messages:
         raise HTTPException(status_code=400, detail='No messages provided')
 
-    user_prompt = flatten_messages(messages)
+    user_prompt = flatten_messages(messages, forward_system=FORWARD_SYSTEM_PROMPT)
     if not user_prompt:
         raise HTTPException(status_code=400, detail='No user content provided')
 
