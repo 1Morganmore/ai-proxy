@@ -1,6 +1,6 @@
 # 🛡️ 국가 반사기(보이스피싱 예방) AI 리버스 프록시 서비스 (fanzha-ai-proxy)
 
-상하이시 공안국이 개발한 "국가 반사기 AI(国家反诈AI)" 지능형 어시스턴트를 표준 **OpenAI 호환 API 인터페이스**(`/v1/chat/completions`)로 변환해 주는 고성능 리버스 프록시 서비스입니다.
+상하이 시 공안국이 개발한 "국가 반사기 AI(国家反诈AI)" 지능형 어시스턴트를 표준 **OpenAI 호환 API 인터페이스**(`/v1/chat/completions`)로 변환해 주는 고성능 리버스 프록시 서비스입니다.
 
 스트리밍(SSE) 출력과 비스트리밍 응답을 완벽히 지원하며, **NextChat**, **OneAPI / New API**, **LobeChat**, **Codex CLI**, **Hermes** 등 주요 AI 클라이언트 및 개발 프레임워크에 매끄럽게 바로 연동할 수 있습니다.
 
