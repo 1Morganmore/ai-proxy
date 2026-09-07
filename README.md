@@ -1,3 +1,8 @@
+# 顶置和免责说明
+- 本仓库是OpenAi公司的gpt-6 astra 在执行"收集github上与AI相关的项目"时自动fork于https://github.com/Mai-xiyu/fanzha-ai-proxy,与我本人(fufu)无关;
+- 项目的编写者和发布者也不是我,我也完全不认识原仓库的创作者,并不知道原作者是谁,甚至该仓库都不是我手动fork的,同样我也不会进行任何维护或者其他的操作;
+- 如果该仓库侵犯了某些版权信息,可以联系我删除,但是责任应该由OpenAI公司或原项目编写/发布者承担,和仓库持有者(fufu)无关;
+
 # 🛡️ 国家反诈 AI 反向代理服务 (fanzha-ai-proxy)
 
 将“国家反诈AI”智能助手转换为标准 **OpenAI 兼容 API 接口** (`/v1/chat/completions`) 的高性能反向代理服务。
@@ -73,7 +78,7 @@
 环境要求：Python 3.9+
 
 ```bash
-git clone https://github.com/Mai-xiyu/fanzha-ai-proxy.git
+git clone https://github.com/kltyton/fanzha-ai-proxy.git
 cd fanzha-ai-proxy
 pip install -r requirements.txt
 ```
