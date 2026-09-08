@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import json
 import uuid
@@ -65,7 +66,30 @@ REFRESH_TOKEN_URL = f'{BASE_URL}/api/v1/user/token/refresh'
 DEFAULT_ACCESS_TOKEN = str(_setting('FANZHA_ACCESS_TOKEN', 'access_token', ''))
 DEFAULT_REFRESH_TOKEN = str(_setting('FANZHA_REFRESH_TOKEN', 'refresh_token', ''))
 DEFAULT_MODEL = str(_setting('DEFAULT_MODEL', 'default_model', '国家反诈AI'))
-FORWARD_SYSTEM_PROMPT = str(_setting('FORWARD_SYSTEM_PROMPT', 'forward_system_prompt', 'false')).strip().lower() in {'1', 'true', 'yes', 'on'}
+def _bool_setting(env_key: str, config_key: str, default: bool) -> bool:
+    raw = _setting(env_key, config_key, 'true' if default else 'false')
+    return str(raw).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+FORWARD_SYSTEM_PROMPT = _bool_setting('FORWARD_SYSTEM_PROMPT', 'forward_system_prompt', False)
+
+# --- Boilerplate stripping -----------------------------------------------------------
+# Two independent kinds of wire noise: the router's in-band `current_intent:` block, which
+# the vendor frontend itself parses out of the answer, and the trailing 防范建议/温馨提示
+# section. `intent-only` removes the former, `full` also removes the latter.
+STRIP_BOILERPLATE_MODES = ('off', 'intent-only', 'full')
+
+
+def _strip_mode_setting() -> str:
+    raw = str(_setting('STRIP_BOILERPLATE', 'strip_boilerplate', 'intent-only')).strip().lower()
+    if raw not in STRIP_BOILERPLATE_MODES:
+        raise RuntimeError(
+            f'STRIP_BOILERPLATE must be one of {", ".join(STRIP_BOILERPLATE_MODES)}, got: {raw!r}'
+        )
+    return raw
+
+
+STRIP_BOILERPLATE = _strip_mode_setting()
 
 DEFAULT_KOREAN_ONLY_INSTRUCTION = '반드시 한국어로만 답변해 주세요. 다른 언어를 섞지 마세요.'
 
@@ -154,6 +178,163 @@ ROLE_LABELS = {
     'assistant': '助手',
 }
 MAX_PROMPT_CHARS = 4000
+
+
+INTENT_HEAD_RE = re.compile(r'^[ \t]*current_intent[ \t]*[:：]')
+FENCE_RE = re.compile(r'^[ \t]*```')
+RULE_LINE_RE = re.compile(r'^[ \t]*(?:-{3,}|\*{3,}|_{3,}|={3,})[ \t]*$')
+
+# Closer keys seen in the task-22 corpus. Only the *trailing* block is removable, and only
+# when the line is a bare heading (`**防范建议：**`, `### 防范建议`, `**💡 防范建议**`) or the
+# inline `防范建议：<one-liner>` form. A heading that merely mentions the key inside a longer
+# phrase (W2: 识别要点与防范建议) is content and is left alone.
+CLOSER_KEYS = ('防范建议', '温馨提示', '特别提醒', '注意事项', '实用建议')
+MAX_CLOSER_CHARS = 400
+
+
+def _closer_heading(line: str) -> bool:
+    """True when a line is a boilerplate closer heading rather than substantive text."""
+    text = line.strip()
+    text = re.sub(r'^#{1,6}[ \t]*', '', text)
+    # Drop markdown/emoji decoration around the heading text, keeping letters and CJK.
+    text = re.sub(r'^[^0-9A-Za-z\u4e00-\u9fff]+', '', text)
+    text = re.sub(r'[\*\s]+$', '', text)
+    for key in CLOSER_KEYS:
+        if text == key or text in (f'{key}：', f'{key}:') or text.startswith(f'{key}：') or text.startswith(f'{key}:'):
+            return True
+    return False
+
+
+class AnswerTextFilter:
+    """Line-oriented stripper shared by the streaming and non-streaming paths.
+
+    Both paths must return byte-identical text for the same upstream answer, so there is
+    exactly one implementation. It only ever holds back text whose fate is still open:
+    an in-band `current_intent:` block, or (full mode) a trailing closer section, which
+    cannot be recognised as trailing until the stream ends.
+    """
+
+    def __init__(self, mode: str):
+        self.mode = mode
+        self._carry = ''
+        self._hold = ''
+        self._state = 'emit'
+        self._expect_fence = False
+
+    def feed(self, text: str) -> str:
+        self._carry += text
+        released: List[str] = []
+        while True:
+            newline = self._carry.find('\n')
+            if newline < 0:
+                break
+            line = self._carry[:newline + 1]
+            self._carry = self._carry[newline + 1:]
+            released.append(self._consume(line))
+        return ''.join(released)
+
+    def flush(self) -> str:
+        """Decide every open question now that no more text is coming."""
+        if self._state == 'closer':
+            held = self._hold + self._carry
+            self._hold = self._carry = ''
+            self._state = 'emit'
+            # A closer section is boilerplate only while it stays short; a long tail that
+            # started with a closer heading is treated as content and returned untouched.
+            return '' if len(held) <= MAX_CLOSER_CHARS else held
+        if self._state == 'rule':
+            # A trailing horizontal rule with no closer heading after it is content.
+            held = self._hold + self._carry
+            self._hold = self._carry = ''
+            self._state = 'emit'
+            return held
+        if self._state == 'intent':
+            # An unterminated intent block is wire noise, not content.
+            tail = self._carry
+            self._carry = ''
+            self._state = 'emit'
+            return tail if len(tail) > MAX_CLOSER_CHARS else ''
+        tail = self._carry
+        self._carry = ''
+        return tail
+
+    def _consume(self, line: str) -> str:
+        if self._state == 'emit':
+            if self.mode != 'off' and INTENT_HEAD_RE.match(line):
+                self._state = 'intent'
+                self._expect_fence = '```' in line and line.count('```') % 2 == 1
+                return ''
+            if self.mode == 'full':
+                if _closer_heading(line):
+                    self._state = 'closer'
+                    self._hold = line
+                    return ''
+                if RULE_LINE_RE.match(line):
+                    self._state = 'rule'
+                    self._hold = line
+                    return ''
+            return line
+
+        if self._state == 'intent':
+            if self._expect_fence:
+                if '```' in line:
+                    self._state = 'emit'
+                    self._expect_fence = False
+                return ''
+            if FENCE_RE.match(line):
+                self._expect_fence = line.count('```') % 2 == 1
+                return ''
+            self._state = 'emit'
+            return line
+
+        if self._state == 'closer':
+            # The closer section runs to the end of the answer: hold every line until flush.
+            self._hold += line
+            return ''
+
+        # 'rule': a horizontal rule is only dropped when a closer heading follows it.
+        if not line.strip():
+            self._hold += line
+            return ''
+        buffered = self._hold + line
+        self._hold = ''
+        self._state = 'emit'
+        if self.mode == 'full' and _closer_heading(line):
+            self._state = 'closer'
+            self._hold = buffered
+            return ''
+        return buffered
+
+
+def filter_answer_text(text: str, mode: str = None) -> str:
+    """Apply the boilerplate filter to a complete answer (non-streaming path)."""
+    answer_filter = AnswerTextFilter(mode or STRIP_BOILERPLATE)
+    return answer_filter.feed(text) + answer_filter.flush()
+
+
+class AnswerStreamScrubber:
+    """Streaming view of one upstream answer: apply the boilerplate filter incrementally.
+
+    Anything already released is final, which is why `AnswerTextFilter` only decides a
+    line once the line is complete.
+    """
+
+    def __init__(self, mode: str = None):
+        self._filter = AnswerTextFilter(mode if mode is not None else STRIP_BOILERPLATE)
+        self._pending = ''
+
+    def feed(self, delta: str) -> str:
+        ready = self._filter.feed(delta)
+        self._pending += ready
+        out, self._pending = self._pending, ''
+        return out
+
+    def finish(self) -> tuple[str, bool]:
+        """Return (text still owed to the client, refused)."""
+        self._pending += self._filter.flush()
+        out, self._pending = self._pending, ''
+        return out, False
+
 
 
 def flatten_messages(messages: List[Any], max_chars: int = MAX_PROMPT_CHARS, forward_system: bool = FORWARD_SYSTEM_PROMPT) -> str:
@@ -445,6 +626,8 @@ async def chat_completions(request: Request):
         headers = build_upstream_headers(current_access_token)
 
         if stream:
+            scrubber = AnswerStreamScrubber()
+
             async def sse_converter():
                 has_yielded_any = False
                 try:
@@ -458,15 +641,28 @@ async def chat_completions(request: Request):
                     yield f'data: {json.dumps(start_chunk, ensure_ascii=False)}\n\n'
                     try:
                         async for chunk_text in iter_upstream_answers(client, headers, payload):
+                            ready = scrubber.feed(chunk_text)
+                            if not ready:
+                                continue
                             has_yielded_any = True
                             chunk_resp = {
                                 'id': chat_id,
                                 'object': 'chat.completion.chunk',
                                 'created': created_time,
                                 'model': model,
-                                'choices': [{'index': 0, 'delta': {'content': chunk_text}, 'finish_reason': None}]
+                                'choices': [{'index': 0, 'delta': {'content': ready}, 'finish_reason': None}]
                             }
                             yield f'data: {json.dumps(chunk_resp, ensure_ascii=False)}\n\n'
+                        if tail:
+                            has_yielded_any = True
+                            tail_resp = {
+                                'id': chat_id,
+                                'object': 'chat.completion.chunk',
+                                'created': created_time,
+                                'model': model,
+                                'choices': [{'index': 0, 'delta': {'content': tail}, 'finish_reason': None}]
+                            }
+                            yield f'data: {json.dumps(tail_resp, ensure_ascii=False)}\n\n'
                         if not has_yielded_any:
                             error_chunk = {
                                 'id': chat_id,
@@ -514,8 +710,12 @@ async def chat_completions(request: Request):
         full_answer = []
         async for chunk_text in iter_upstream_answers(client, headers, payload):
             full_answer.append(chunk_text)
-        content = ''.join(full_answer)
+        raw_content = ''.join(full_answer)
+        if not raw_content:
+            raise HTTPException(status_code=502, detail='Upstream returned no incremental answer')
+        content = filter_answer_text(raw_content)
         if not content:
+            # The whole answer was wire noise; report it the same way the stream path does.
             raise HTTPException(status_code=502, detail='Upstream returned no incremental answer')
         return JSONResponse({
             'id': chat_id,
