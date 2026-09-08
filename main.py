@@ -8,7 +8,7 @@ from typing import Any, List, Union
 
 import httpx
 from dotenv import dotenv_values, load_dotenv
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 import uvicorn
 
@@ -62,6 +62,11 @@ BASE_URL = str(_setting('FANZHA_BASE_URL', 'base_url', 'https://xzfzznt.gaj.sh.g
 CREATE_SESSION_URL = f'{BASE_URL}/api/ai/create_session'
 CHAT_STREAM_URL = f'{BASE_URL}/api/ai/chat?type=0'
 REFRESH_TOKEN_URL = f'{BASE_URL}/api/v1/user/token/refresh'
+
+# Knowledge endpoints of the same service. Task 25 confirmed they ride the plain user
+# bearer token, so they are reachable without going through the chat gate at all.
+KB_SEARCH_URL = f'{BASE_URL}/api/v1/anti-fraud/search'
+KB_TERM_URL = f'{BASE_URL}/api/v1/faq/search'
 
 DEFAULT_ACCESS_TOKEN = str(_setting('FANZHA_ACCESS_TOKEN', 'access_token', ''))
 DEFAULT_REFRESH_TOKEN = str(_setting('FANZHA_REFRESH_TOKEN', 'refresh_token', ''))
@@ -610,6 +615,63 @@ async def list_models():
 @app.get('/health')
 async def health():
     return {'status': 'ok'}
+
+LOOPBACK_HOSTS = {'127.0.0.1', '::1', 'localhost'}
+
+
+def _require_loopback(request: Request) -> None:
+    """Knowledge routes read the configured token, so they stay loopback-only."""
+    client = request.client
+    host = (client.host if client else '') or ''
+    if host.startswith('127.') or host in LOOPBACK_HOSTS or host.startswith('::1'):
+        return
+    raise HTTPException(status_code=403, detail='kb endpoints are loopback-only')
+
+
+async def _kb_forward(url: str, params: dict[str, Any], access_token: str) -> JSONResponse:
+    """GET an upstream knowledge endpoint and pass the JSON body and status through."""
+    headers = build_upstream_headers(access_token)
+    headers['Accept'] = 'application/json'
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=headers, params=params)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f'Knowledge request failed: {exc}') from exc
+    data = _json_or_none(resp)
+    if data is None:
+        raise HTTPException(
+            status_code=502,
+            detail=f'Knowledge endpoint returned non-JSON body (HTTP {resp.status_code})',
+        )
+    return JSONResponse(status_code=resp.status_code, content=data)
+
+
+@app.get('/kb/search')
+async def kb_search(
+    request: Request,
+    keyword: str = Query(..., min_length=1, max_length=128),
+    locale: str = Query('zh-CN', max_length=16),
+):
+    """Case/type/news search against the upstream anti-fraud knowledge base."""
+    _require_loopback(request)
+    if not token_mgr.access_token:
+        raise HTTPException(status_code=401, detail='Missing FANZHA_ACCESS_TOKEN for knowledge lookups')
+    return await _kb_forward(KB_SEARCH_URL, {'keyword': keyword, 'locale': locale}, token_mgr.access_token)
+
+
+@app.get('/kb/term')
+async def kb_term(
+    request: Request,
+    keyword: str = Query(..., min_length=1, max_length=128),
+    limit: int = Query(10, ge=1, le=50),
+    locale: str = Query('zh-CN', max_length=16),
+):
+    """Dictionary-style term suggestions from the upstream FAQ endpoint."""
+    _require_loopback(request)
+    if not token_mgr.access_token:
+        raise HTTPException(status_code=401, detail='Missing FANZHA_ACCESS_TOKEN for knowledge lookups')
+    return await _kb_forward(KB_TERM_URL, {'keyword': keyword, 'limit': limit, 'locale': locale}, token_mgr.access_token)
+
 
 @app.post('/v1/chat/completions')
 @app.post('/chat/completions')
