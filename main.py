@@ -73,6 +73,17 @@ def _bool_setting(env_key: str, config_key: str, default: bool) -> bool:
 
 FORWARD_SYSTEM_PROMPT = _bool_setting('FORWARD_SYSTEM_PROMPT', 'forward_system_prompt', False)
 
+# --- Out-of-domain refusal detection -------------------------------------------------
+# The upstream workflow does not answer an off-topic question with an HTTP error. It
+# returns HTTP 200 whose body is one fixed 40-character string, and its intent router
+# leaks a routing marker. Both literals are byte-exact from the task-22 corpus
+# (task-22b-indomain/V9.json, task-22c-coding/T1-T4.json + _intent_classification.json).
+REFUSAL_CANNED_ANSWER = '您好，您的提问超出了我的回答范畴，如有与电信网络诈骗相关的问题，欢迎您继续咨询。'
+REFUSAL_ROUTING_MARKER = '与反诈无关'
+OUT_OF_DOMAIN_DETAIL = 'fanzha_out_of_domain'
+OUT_OF_DOMAIN_STATUS = 503
+REFUSAL_AS_ERROR = _bool_setting('FANZHA_REFUSAL_AS_ERROR', 'fanzha_refusal_as_error', True)
+
 # --- Boilerplate stripping -----------------------------------------------------------
 # Two independent kinds of wire noise: the router's in-band `current_intent:` block, which
 # the vendor frontend itself parses out of the answer, and the trailing 防范建议/温馨提示
@@ -312,29 +323,51 @@ def filter_answer_text(text: str, mode: str = None) -> str:
     return answer_filter.feed(text) + answer_filter.flush()
 
 
-class AnswerStreamScrubber:
-    """Streaming view of one upstream answer: apply the boilerplate filter incrementally.
+def is_out_of_domain(text: str) -> bool:
+    """True when the assembled upstream text is the gate refusal or carries its marker."""
+    if not text:
+        return False
+    return REFUSAL_CANNED_ANSWER in text or REFUSAL_ROUTING_MARKER in text
 
-    Anything already released is final, which is why `AnswerTextFilter` only decides a
-    line once the line is complete.
+
+def _could_still_be_refusal(text: str) -> bool:
+    """True while the streamed text is still a possible prefix of the canned refusal."""
+    return bool(text) and REFUSAL_CANNED_ANSWER.startswith(text)
+
+
+class AnswerStreamScrubber:
+    """Streaming view of one upstream answer: gate-refusal guard + boilerplate filter.
+
+    Upstream sends the whole canned refusal in a single event and it contains no newline,
+    so holding back text that is still a character prefix of it costs at most 40
+    characters and keeps the refusal away from the client. Anything already released is
+    final, which is why `AnswerTextFilter` only decides a line once the line is complete.
     """
 
-    def __init__(self, mode: str = None):
+    def __init__(self, mode: str = None, refusal_check: bool = True):
         self._filter = AnswerTextFilter(mode if mode is not None else STRIP_BOILERPLATE)
+        self.refusal_check = refusal_check
+        self.raw = ''
         self._pending = ''
 
     def feed(self, delta: str) -> str:
+        self.raw += delta
         ready = self._filter.feed(delta)
-        self._pending += ready
-        out, self._pending = self._pending, ''
-        return out
+        if self.refusal_check and _could_still_be_refusal(self.raw):
+            self._pending += ready
+            return ''
+        chunk = self._pending + ready
+        self._pending = ''
+        return chunk
 
     def finish(self) -> tuple[str, bool]:
         """Return (text still owed to the client, refused)."""
         self._pending += self._filter.flush()
-        out, self._pending = self._pending, ''
-        return out, False
-
+        tail = self._pending
+        self._pending = ''
+        if self.refusal_check and is_out_of_domain(self.raw):
+            return '', True
+        return tail, False
 
 
 def flatten_messages(messages: List[Any], max_chars: int = MAX_PROMPT_CHARS, forward_system: bool = FORWARD_SYSTEM_PROMPT) -> str:
@@ -626,7 +659,7 @@ async def chat_completions(request: Request):
         headers = build_upstream_headers(current_access_token)
 
         if stream:
-            scrubber = AnswerStreamScrubber()
+            scrubber = AnswerStreamScrubber(refusal_check=REFUSAL_AS_ERROR)
 
             async def sse_converter():
                 has_yielded_any = False
@@ -653,6 +686,16 @@ async def chat_completions(request: Request):
                                 'choices': [{'index': 0, 'delta': {'content': ready}, 'finish_reason': None}]
                             }
                             yield f'data: {json.dumps(chunk_resp, ensure_ascii=False)}\n\n'
+                        tail, refused = scrubber.finish()
+                        if refused:
+                            error_chunk = {
+                                'id': chat_id,
+                                'object': 'error',
+                                'error': {'message': OUT_OF_DOMAIN_DETAIL, 'type': 'fanzha_out_of_domain', 'code': OUT_OF_DOMAIN_STATUS},
+                            }
+                            yield f'data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n'
+                            yield 'data: [DONE]\n\n'
+                            return
                         if tail:
                             has_yielded_any = True
                             tail_resp = {
@@ -713,6 +756,8 @@ async def chat_completions(request: Request):
         raw_content = ''.join(full_answer)
         if not raw_content:
             raise HTTPException(status_code=502, detail='Upstream returned no incremental answer')
+        if REFUSAL_AS_ERROR and is_out_of_domain(raw_content):
+            raise HTTPException(status_code=OUT_OF_DOMAIN_STATUS, detail=OUT_OF_DOMAIN_DETAIL)
         content = filter_answer_text(raw_content)
         if not content:
             # The whole answer was wire noise; report it the same way the stream path does.
