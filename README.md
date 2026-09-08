@@ -19,6 +19,7 @@ The proxy implements these routes:
 | `GET /`, `GET /health` | `{"status": "ok"}` from the local process |
 | `GET /kb/search?keyword=&locale=` | Pass-through to the upstream anti-fraud knowledge search |
 | `GET /kb/term?keyword=&limit=&locale=` | Pass-through to the upstream FAQ / dictionary search |
+| `GET /kb/list?type=&locale=` | Pass-through to the upstream `anti-fraud/list` catalog (see below) |
 
 Chat is the only route that talks to the gated model. The two `/kb/*` routes read the anti-fraud knowledge base directly, so they keep working on questions the chat gate refuses. Beyond these, there are no embeddings, no `/v1/responses`, no tool calling, no image input, and no real multimodal support: text is extracted from complex `content` structures and everything else is dropped. Treat chat as a narrow shim, not a complete OpenAI API.
 
@@ -144,6 +145,8 @@ curl -sG http://127.0.0.1:8088/kb/term  --data-urlencode 'keyword=刷单' --data
 ```
 
 `/kb/search` forwards to `GET /api/v1/anti-fraud/search` and returns `{"code": 200, "data": {"cases": [...], "types": [...], "news": [...]}}`; `/kb/term` forwards to `GET /api/v1/faq/search`. Both pass the upstream HTTP status and JSON body through unchanged, so a `400` from an unsupported `type` or `locale` is visible to the caller instead of being papered over. They always use the **configured** token, never a client `Authorization` header, and they reject any request whose peer address is not loopback — a second line of defence behind the default `HOST=127.0.0.1` binding.
+
+`/kb/list` forwards to `GET /api/v1/anti-fraud/list`, whose `type` parameter is a server-side literal enum. What it is **not**: the `glossary` / `top-cases` / `law` strings you see in `/pages/read/index?type=…`. Those are uni-app route parameters from the dictionary and reader pages, and the API answers `400` (`data验证错误: query -> type: Input should be …`) for them, as it does for numeric values like `1`. What it **is**: the value the vendor bundle itself sends — `assets/pages-fraud-type-index.*.js` calls `list("type", locale)`, i.e. `?type=type`, while `assets/news.*.js` defaults its wrapper to `?type=news`. So the honest state of this route is: implemented as a straight passthrough, defaults to `type=type`, offline-verified, and **not** confirmed against a live 200 yet, because the probe budget for this endpoint was spent on the two `400`s above. Read the `message` field of any `400` you get: it enumerates the accepted values.
 
 ## Errors
 

@@ -67,6 +67,7 @@ REFRESH_TOKEN_URL = f'{BASE_URL}/api/v1/user/token/refresh'
 # bearer token, so they are reachable without going through the chat gate at all.
 KB_SEARCH_URL = f'{BASE_URL}/api/v1/anti-fraud/search'
 KB_TERM_URL = f'{BASE_URL}/api/v1/faq/search'
+KB_LIST_URL = f'{BASE_URL}/api/v1/anti-fraud/list'
 
 DEFAULT_ACCESS_TOKEN = str(_setting('FANZHA_ACCESS_TOKEN', 'access_token', ''))
 DEFAULT_REFRESH_TOKEN = str(_setting('FANZHA_REFRESH_TOKEN', 'refresh_token', ''))
@@ -671,6 +672,26 @@ async def kb_term(
     if not token_mgr.access_token:
         raise HTTPException(status_code=401, detail='Missing FANZHA_ACCESS_TOKEN for knowledge lookups')
     return await _kb_forward(KB_TERM_URL, {'keyword': keyword, 'limit': limit, 'locale': locale}, token_mgr.access_token)
+
+
+@app.get('/kb/list')
+async def kb_list(
+    request: Request,
+    type: str = Query('type', min_length=1, max_length=32, alias='type'),
+    locale: str = Query('zh-CN', max_length=16),
+):
+    """Catalog dump. Upstream validates `type` against a literal enum; a bad value comes
+    back as its 400 with the accepted set in `message`, which is the discovery path.
+
+    Statically traced from the vendor bundle: the fraud-type page calls this with
+    `type=type` and the news module defaults to `type=news`. The dictionary page values
+    (`glossary`, `top-cases`, `law`) are uni-app *route* parameters, not API enum values,
+    which is why probing them returns 400.
+    """
+    _require_loopback(request)
+    if not token_mgr.access_token:
+        raise HTTPException(status_code=401, detail='Missing FANZHA_ACCESS_TOKEN for knowledge lookups')
+    return await _kb_forward(KB_LIST_URL, {'type': type, 'locale': locale}, token_mgr.access_token)
 
 
 @app.post('/v1/chat/completions')
