@@ -67,6 +67,24 @@ DEFAULT_REFRESH_TOKEN = str(_setting('FANZHA_REFRESH_TOKEN', 'refresh_token', ''
 DEFAULT_MODEL = str(_setting('DEFAULT_MODEL', 'default_model', '国家反诈AI'))
 FORWARD_SYSTEM_PROMPT = str(_setting('FORWARD_SYSTEM_PROMPT', 'forward_system_prompt', 'false')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
+DEFAULT_KOREAN_ONLY_INSTRUCTION = '반드시 한국어로만 답변해 주세요. 다른 언어를 섞지 마세요.'
+
+
+def _korean_only_setting() -> str:
+    """Resolve KOREAN_ONLY_INSTRUCTION as process env > .env > config.json > default.
+
+    Unlike _setting(), an explicitly empty value is honoured instead of falling back to
+    the default, so `KOREAN_ONLY_INSTRUCTION=` turns the built-in instruction off.
+    """
+    if 'KOREAN_ONLY_INSTRUCTION' in os.environ:
+        return os.environ['KOREAN_ONLY_INSTRUCTION'].strip()
+    return str(_setting('KOREAN_ONLY_INSTRUCTION', 'korean_only_instruction', DEFAULT_KOREAN_ONLY_INSTRUCTION))
+
+
+KOREAN_ONLY_INSTRUCTION = _korean_only_setting()
+ANSWER_INSTRUCTION_SUFFIX = f'\n{KOREAN_ONLY_INSTRUCTION}' if KOREAN_ONLY_INSTRUCTION else ''
+
+
 
 app = FastAPI(title='National Anti-Fraud AI - OpenAI API Compatible Reverse Proxy', version='1.1.0')
 
@@ -404,9 +422,12 @@ async def chat_completions(request: Request):
     if not messages:
         raise HTTPException(status_code=400, detail='No messages provided')
 
-    user_prompt = flatten_messages(messages, forward_system=FORWARD_SYSTEM_PROMPT)
+    # The built-in answer-language instruction is appended before the cap is applied:
+    # flatten_messages gets a budget reduced by the suffix, so the final prompt stays <= MAX_PROMPT_CHARS.
+    user_prompt = flatten_messages(messages, max_chars=MAX_PROMPT_CHARS - len(ANSWER_INSTRUCTION_SUFFIX), forward_system=FORWARD_SYSTEM_PROMPT)
     if not user_prompt:
         raise HTTPException(status_code=400, detail='No user content provided')
+    user_prompt += ANSWER_INSTRUCTION_SUFFIX
 
     max_tokens = body.get('max_tokens') or 2048
     try:
