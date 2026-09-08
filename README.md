@@ -1,6 +1,7 @@
 # ai-proxy
 
 [English](README.md) | [한국어](README.ko.md)
+
 An OpenAI-compatible reverse proxy for the web AI behind China's National Anti-Fraud Center service (国家反诈AI). It runs on your machine, accepts `POST /v1/chat/completions`, and relays the question to `https://xzfzznt.gaj.sh.gov.cn`, converting the upstream SSE stream back into OpenAI-style chunks.
 
 This repository is a preservation fork of `maakdan/fanzha-ai-proxy1`. It hosts no model, provides no account, and grants no access to the upstream service. Use only credentials for an account you own and are authorized to use. The project is not affiliated with the upstream service or with OpenAI.
