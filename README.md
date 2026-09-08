@@ -66,6 +66,7 @@ Settings resolve in this order: process environment, then `.env`, then `config.j
 | `PORT` | `port` | `8088` | Must parse as an integer in 1..65535 |
 | `DEFAULT_MODEL` | `default_model` | `国家反诈AI` | Label used when a request omits `model` |
 | `FORWARD_SYSTEM_PROMPT` | `forward_system_prompt` | `false` | `true`, `1`, `yes`, or `on` forwards client `role: system` text upstream |
+| `KOREAN_ONLY_INSTRUCTION` | `korean_only_instruction` | `반드시 한국어로만 답변해 주세요. 다른 언어를 섞지 마세요.` | Answer-language instruction appended to every prompt. Set another phrase to reword it, or an empty value to stop appending (the one setting where empty is meaningful) |
 
 `.env` is loaded with `load_dotenv(..., override=False)`, so a variable already exported in your shell wins over the file. Watch for leftovers from an earlier session.
 
@@ -106,11 +107,11 @@ curl -N http://127.0.0.1:8088/v1/chat/completions \
   -d '{"model":"fanzha-ai","messages":[{"role":"user","content":"What are three warning signs of a phone scam?"}],"stream":true}'
 ```
 
-Expect an answer from the upstream model's own voice, usually in Chinese, and expect it to be about fraud-prevention topics. `/v1/models` returns a fixed list (`国家反诈AI`, `fanzha-ai`, `gpt-4o-mini`); none of those names selects a different upstream model. The requested label is echoed back in the response while the upstream payload sends an empty `model_name`, so a `gpt-4o-mini` label is not evidence of an OpenAI model anywhere in the chain.
+Expect an answer about fraud-prevention topics, and expect it in Korean: the proxy appends a built-in Korean-only instruction to every prompt (`KOREAN_ONLY_INSTRUCTION`), without which the upstream model usually replies in Chinese. `/v1/models` returns a fixed list (`国家反诈AI`, `fanzha-ai`, `gpt-4o-mini`); none of those names selects a different upstream model. The requested label is echoed back in the response while the upstream payload sends an empty `model_name`, so a `gpt-4o-mini` label is not evidence of an OpenAI model anywhere in the chain.
 
 ## What happens to your request
 
-Each call creates a fresh upstream session via `POST /api/ai/create_session`, so the upstream service holds no conversation state between requests. The proxy then flattens `messages` into one text prompt: turns are labeled `系统`, `用户`, and `助手`, everything after the last user message is discarded, and the whole prompt is capped at 4000 characters, with the last user turn kept and older turns trimmed to fit. System text is dropped unless `FORWARD_SYSTEM_PROMPT` is enabled; upstream docs say injected boilerplate such as "You are a helpful assistant" can be read as a jailbreak attempt and trigger an out-of-scope refusal, which is why the default is off.
+Each call creates a fresh upstream session via `POST /api/ai/create_session`, so the upstream service holds no conversation state between requests. The proxy then flattens `messages` into one text prompt: turns are labeled `系统`, `用户`, and `助手`, everything after the last user message is discarded, and the whole prompt is capped at 4000 characters, with the last user turn kept and older turns trimmed to fit. Before that cap is applied, the built-in `KOREAN_ONLY_INSTRUCTION` sentence is appended on its own line, so the text that reaches upstream always ends with it and still fits inside 4000 characters. System text is dropped unless `FORWARD_SYSTEM_PROMPT` is enabled; upstream docs say injected boilerplate such as "You are a helpful assistant" can be read as a jailbreak attempt and trigger an out-of-scope refusal, which is why the default is off.
 
 The chat call is `POST /api/ai/chat?type=0` with a JSON body containing `text`, `version: 2`, `stream: true`, `max_tokens` (client value or 2048), `temperature: "0.1"`, `using_context: false`, `answer_mode: "normal"`, an empty `files` list, and the session id as `conversation_id`. Request headers imitate a web browser: `Authorization: Bearer <token>`, `channel: web`, matching `Origin` and `Referer`, and a desktop Chrome user agent. Answer text is read from SSE events where `data.type` is `answer`. Upstream calls time out after 90 seconds, session creation and token refresh after 10.
 
