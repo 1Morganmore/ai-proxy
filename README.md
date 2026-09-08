@@ -17,8 +17,10 @@ The proxy implements these routes:
 | `POST /v1/chat/completions`, `POST /chat/completions` | Chat, with `"stream": true` and `"stream": false` |
 | `GET /v1/models`, `GET /models` | Fixed, hard-coded model list |
 | `GET /`, `GET /health` | `{"status": "ok"}` from the local process |
+| `GET /kb/search?keyword=&locale=` | Pass-through to the upstream anti-fraud knowledge search |
+| `GET /kb/term?keyword=&limit=&locale=` | Pass-through to the upstream FAQ / dictionary search |
 
-That's all. There are no embeddings, no `/v1/responses`, no tool calling, no image input, and no real multimodal support: text is extracted from complex `content` structures and everything else is dropped. Treat it as a narrow chat shim, not a complete OpenAI API.
+Chat is the only route that talks to the gated model. The two `/kb/*` routes read the anti-fraud knowledge base directly, so they keep working on questions the chat gate refuses. Beyond these, there are no embeddings, no `/v1/responses`, no tool calling, no image input, and no real multimodal support: text is extracted from complex `content` structures and everything else is dropped. Treat chat as a narrow shim, not a complete OpenAI API.
 
 ## Requirements
 
@@ -67,6 +69,8 @@ Settings resolve in this order: process environment, then `.env`, then `config.j
 | `DEFAULT_MODEL` | `default_model` | `国家反诈AI` | Label used when a request omits `model` |
 | `FORWARD_SYSTEM_PROMPT` | `forward_system_prompt` | `false` | `true`, `1`, `yes`, or `on` forwards client `role: system` text upstream |
 | `KOREAN_ONLY_INSTRUCTION` | `korean_only_instruction` | `반드시 한국어로만 답변해 주세요. 다른 언어를 섞지 마세요.` | Answer-language instruction appended to every prompt. Set another phrase to reword it, or an empty value to stop appending (the one setting where empty is meaningful) |
+| `FANZHA_REFUSAL_AS_ERROR` | `fanzha_refusal_as_error` | `true` | Map the upstream out-of-scope gate refusal to an error (see [Errors](#errors)); `false` forwards the refusal text as a normal answer |
+| `STRIP_BOILERPLATE` | `strip_boilerplate` | `intent-only` | `off`, `intent-only` (drop in-band `current_intent:` blocks), or `full` (also drop the trailing 防范建议/温馨提示 closer). An unrecognised value aborts startup |
 
 `.env` is loaded with `load_dotenv(..., override=False)`, so a variable already exported in your shell wins over the file. Watch for leftovers from an earlier session.
 
@@ -117,6 +121,30 @@ The chat call is `POST /api/ai/chat?type=0` with a JSON body containing `text`, 
 
 If a 401 comes back during session creation and a refresh token is configured, the proxy posts to `/api/v1/user/token/refresh` once and retries with the new token, which is then also used for the chat request. Refreshed tokens live in memory only; they are never written to disk, so a restart falls back to whatever is in your configuration.
 
+### The gate refusal
+
+Upstream is a routed workflow, not a bare model. When its intent router decides a question is unrelated to telecom fraud, it answers **HTTP 200** with one fixed 40-character string, `您好，您的提问超出了我的回答范畴，如有与电信网络诈骗相关的问题，欢迎您继续咨询。`, and its router node leaks the marker `与反诈无关`. Both literals are matched in the assembled text (and, while streaming, in every prefix of it), so no refusal reaches the client as a successful answer:
+
+- Non-streaming: `503` with `{"detail": "fanzha_out_of_domain"}`.
+- Streaming: the refusal text is withheld, then one `object: "error"` event with `code: 503` and message `fanzha_out_of_domain`, then `data: [DONE]`.
+
+That is what makes the service usable inside a fallback chain: an agent can treat `fanzha_out_of_domain` as "this provider declined, try the next one" instead of passing a polite dead end to the user. Set `FANZHA_REFUSAL_AS_ERROR=false` to get the raw refusal text back. Because matching is substring-based, an in-domain answer that happens to quote either literal is also mapped; the marker form is what the router emits, not something the answer model normally writes.
+
+### Boilerplate in the answer
+
+`STRIP_BOILERPLATE` decides how much wire noise is removed before the answer is returned. `intent-only` (the default) drops in-band `current_intent:` blocks, including the fenced `{"class": "..."}` JSON that follows them — the vendor frontend parses that marker out of the answer itself, which is what proves it is transport noise rather than content. `full` additionally drops a trailing closer section whose heading is a bare `防范建议`, `温馨提示`, `特别提醒`, `注意事项`, or `实用建议` (in bold, `###`, or `防范建议：<one-liner>` form), provided the whole section is at most 400 characters. A heading that only mentions one of those words inside a longer phrase stays, and an unmarked code fence is never touched. Streaming and non-streaming run through the same line-oriented filter, so the same upstream answer produces the same text either way. `off` returns upstream text verbatim.
+
+### Knowledge lookups
+
+The upstream service also exposes plain JSON endpoints for its anti-fraud knowledge base, and they authorise with the same bearer token the chat flow uses. The proxy forwards them server-side, so a client can query the corpus without a chat round-trip and without the gate:
+
+```bash
+curl -sG http://127.0.0.1:8088/kb/search --data-urlencode 'keyword=转账' --data-urlencode 'locale=zh-CN'
+curl -sG http://127.0.0.1:8088/kb/term  --data-urlencode 'keyword=刷单' --data-urlencode 'limit=10'
+```
+
+`/kb/search` forwards to `GET /api/v1/anti-fraud/search` and returns `{"code": 200, "data": {"cases": [...], "types": [...], "news": [...]}}`; `/kb/term` forwards to `GET /api/v1/faq/search`. Both pass the upstream HTTP status and JSON body through unchanged, so a `400` from an unsupported `type` or `locale` is visible to the caller instead of being papered over. They always use the **configured** token, never a client `Authorization` header, and they reject any request whose peer address is not loopback — a second line of defence behind the default `HOST=127.0.0.1` binding.
+
 ## Errors
 
 | Situation | Result |
@@ -126,6 +154,9 @@ If a 401 comes back during session creation and a refresh token is configured, t
 | Session creation fails, or returns no session id | `502`, detail includes the upstream status and a body excerpt |
 | Upstream chat request answers 4xx or 5xx | `502`, detail includes up to 500 characters of the upstream body |
 | Upstream stream yields no answer text | Non-streaming: `502`. Streaming: one `object: "error"` event with code 502, then `data: [DONE]` |
+| Upstream answer is the out-of-scope gate refusal (or carries the `与反诈无关` marker) | Non-streaming: `503` with `"detail": "fanzha_out_of_domain"`. Streaming: one `object: "error"` event with code 503 and that message, then `data: [DONE]`. Suppressed entirely by `FANZHA_REFUSAL_AS_ERROR=false` |
+| `/kb/*` called from a non-loopback peer | `403` |
+| `/kb/*` upstream returns a non-JSON body, or the request fails | `502` |
 | Anything unexpected | `500` |
 
 There is no canned success fallback. This revision removed the old hard-coded acknowledgment, so an empty or failed upstream response surfaces as an error rather than a polite greeting. One caveat: once a stream has started, the HTTP status is already 200, so clients must inspect the events instead of trusting the status line. Error details can carry upstream response fragments, which is useful locally and unsafe to paste publicly.
